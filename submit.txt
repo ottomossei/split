@@ -1,0 +1,650 @@
+-- splittype/splittype.go --
+package split
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"regexp"
+	"strconv"
+)
+
+type SplitType struct {
+	ThresholdType string
+	Value         int
+	OutputLine    int
+}
+
+var (
+	byteUnitMap = map[string]int{
+		"k": 1, "K": 1,
+		"m": 2, "M": 2,
+		"G": 3,
+		"T": 4,
+		"P": 5,
+	}
+)
+
+func ParseByteSize(input string) (int, error) {
+	re := regexp.MustCompile(`^(\d+)([mMkKGTP])?B?$`)
+	matches := re.FindStringSubmatch(input)
+
+	if len(matches) < 2 {
+		return 0, fmt.Errorf("invalid input: %s", input)
+	}
+
+	size, err := strconv.Atoi(matches[1])
+
+	if err != nil {
+		return 0, fmt.Errorf("invalid size: %s", matches[1])
+	}
+	unit := matches[2]
+	exponent, found := byteUnitMap[unit]
+
+	if found {
+		size *= int(math.Pow(1024, float64(exponent)))
+	}
+
+	return size, nil
+}
+
+func ExtractNumbers(input string) (int, int, error) {
+	if onlyNumber, err := parseOnlyNumber(input); err == nil {
+		return 0, onlyNumber, nil
+	}
+
+	if firstNumber, secondNumber, err := parseRange(input); err == nil {
+		return firstNumber, secondNumber, nil
+	}
+
+	return 0, 0, errors.New("extractNumbers: error")
+}
+
+func parseOnlyNumber(input string) (int, error) {
+	numericPattern := "^[0-9]+$"
+	if matched, err := regexp.MatchString(numericPattern, input); err == nil && matched {
+		return strconv.Atoi(input)
+	}
+	return 0, fmt.Errorf("invalid format: %s", input)
+}
+
+func parseRange(input string) (int, int, error) {
+	pattern := `(\d+)/(\d+)`
+	re := regexp.MustCompile(pattern)
+	match := re.FindStringSubmatch(input)
+
+	if len(match) >= 3 {
+		firstNumber, err1 := strconv.Atoi(match[1])
+		secondNumber, err2 := strconv.Atoi(match[2])
+		if err1 == nil && err2 == nil && firstNumber <= secondNumber {
+			return firstNumber, secondNumber, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("invalid format: %s", input)
+}
+-- splittype/splittype_test.go --
+package split
+
+import (
+	"testing"
+)
+
+func TestParseByteSize(t *testing.T) {
+	const unit int = 1024
+	testCases := []struct {
+		input    string
+		expected int
+		wantErr  bool
+	}{
+		{"1000", 1000, false},
+		{"2k", 2 * unit, false},
+		{"5M", 5 * unit * unit, false},
+		{"1G", 1 * unit * unit * unit, false},
+		{"10T", 10 * unit * unit * unit * unit, false},
+		{"15P", 15 * unit * unit * unit * unit * unit, false},
+		{"aaaa", 0, true},
+		{"", 0, true},
+		{"1KB", unit, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			result, err := ParseByteSize(tc.input)
+			if err != nil && !tc.wantErr {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if result != tc.expected {
+				t.Errorf("Expected: %d, Got: %d", tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestExtractNumbers(t *testing.T) {
+	testCases := []struct {
+		input          string
+		expectedFirst  int
+		expectedSecond int
+		wantErr        bool
+	}{
+		{"123", 0, 123, false},
+		{"5/10", 5, 10, false},
+		{"abc", 0, 0, true},
+		{"12xyz", 0, 0, true},
+		{"9876.", 0, 0, true},
+		{"invalid", 0, 0, true},
+		{"1KB", 0, 0, true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			first, second, err := ExtractNumbers(tc.input)
+			if err != nil && !tc.wantErr {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if first != tc.expectedFirst || second != tc.expectedSecond {
+				t.Errorf("Expected: (%d, %d), Got: (%d, %d)", tc.expectedFirst, tc.expectedSecond, first, second)
+			}
+		})
+	}
+}
+
+func TestParseOnlyNumber(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected int
+		wantErr  bool
+	}{
+		{"123", 123, false},
+		{"456789", 456789, false},
+		{"abc", 0, true},
+		{"12xyz", 0, true},
+		{"9876.", 0, true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			result, err := parseOnlyNumber(tc.input)
+			if err != nil && !tc.wantErr {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if result != tc.expected {
+				t.Errorf("Expected: %d, Got: %d", tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestParseRange(t *testing.T) {
+	testCases := []struct {
+		input          string
+		expectedFirst  int
+		expectedSecond int
+		wantErr        bool
+	}{
+		{"1/5", 1, 5, false},
+		{"10/20", 10, 20, false},
+		{"5/3", 0, 0, true},
+		{"invalid", 0, 0, true},
+		{"abc/def", 0, 0, true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			first, second, err := parseRange(tc.input)
+			if err != nil && !tc.wantErr {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if first != tc.expectedFirst || second != tc.expectedSecond {
+				t.Errorf("Expected: (%d, %d), Got: (%d, %d)", tc.expectedFirst, tc.expectedSecond, first, second)
+			}
+		})
+	}
+}
+-- go.mod --
+module split
+
+go 1.21.0
+-- split.go --
+package main
+
+import (
+	"fmt"
+	"os"
+	splitConfig "split/config"
+	splitIo "split/io"
+)
+
+func main() {
+	config, err := splitConfig.ParseFlags()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "split: %v\n", err)
+		os.Exit(1)
+	}
+
+	// for debug
+	fmt.Println("-b:", config.B)
+	fmt.Println("-l:", config.L)
+	fmt.Println("-n:", config.N)
+
+	splitType, err := config.ConvertSplitType()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "split: %v\n", err)
+		os.Exit(1)
+	}
+
+	err = splitIo.SplitDataToFiles(splitType)
+
+}
+-- config/config_test.go --
+package split
+
+import (
+	"testing"
+)
+
+func TestInvalidBFlag(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"", false},
+		{"123B", false},
+		{"123kB", false},
+		{"123mB", false},
+		{"123M", false},
+		{"123kG", true},
+		{"ABC", true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			actual := invalidBFlag(test.input)
+			if actual != test.expected {
+				t.Errorf("For input %q, expected %v, but got %v", test.input, test.expected, actual)
+			}
+		})
+	}
+}
+
+func TestConfigValidation(t *testing.T) {
+	testCases := []struct {
+		desc   string
+		config Config
+		errMsg string
+	}{
+		{
+			desc: "Valid Config",
+			config: Config{
+				B: "",
+				L: 1000,
+				N: "",
+			},
+			errMsg: "",
+		},
+		{
+			desc: "Invalid L Value",
+			config: Config{
+				B: "",
+				L: -1,
+				N: "",
+			},
+			errMsg: "invalid number of lines: ‘-1’",
+		},
+		{
+			desc: "Invalid L Value",
+			config: Config{
+				B: "10AA",
+				L: 1000,
+				N: "",
+			},
+			errMsg: "invalid number of lines: ‘10AA’",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := tc.config.validate()
+			if tc.errMsg != "" {
+				if err == nil || err.Error() != tc.errMsg {
+					t.Errorf("Expected error message: '%s', but got: '%v'", tc.errMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, but got: '%v'", err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfig_ConvertSplitType(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   Config
+		expected SplitType
+		err      error
+	}{
+		{
+			name: "Test Case 1",
+			config: Config{
+				B: "100",
+			},
+			expected: SplitType{
+				ThresholdType: "byte",
+				Value:         100,
+				OutputLine:    0,
+			},
+			err: nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := test.config.ConvertSplitType()
+
+			if err != test.err {
+				t.Errorf("Expected error: %v, but got: %v", test.err, err)
+			}
+
+			if actual != test.expected {
+				t.Errorf("Expected: %+v, but got: %+v", test.expected, actual)
+			}
+		})
+	}
+}
+-- config/config.go --
+package split
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"regexp"
+	splitType "split/splittype"
+)
+
+const (
+	InitConfigB = ""
+	InitConfigL = 1000
+	InitConfigN = ""
+)
+
+type Config struct {
+	B string
+	L int
+	N string
+}
+
+type SplitType = splitType.SplitType
+
+func invalidBFlag(input string) bool {
+	if input == "" {
+		return false
+	}
+	matched, _ := regexp.MatchString(`^\d+[mMkKGTP]?[B]?$`, input)
+	return !matched
+}
+
+func (config *Config) validate() error {
+	fmt.Println(config.B, config.L, config.N)
+	switch {
+	case config.B != InitConfigB && config.L != InitConfigL && config.N == InitConfigN:
+		fallthrough
+	case config.B == InitConfigB && config.L != InitConfigL && config.N != InitConfigN:
+		fallthrough
+	case config.B != InitConfigB && config.L == InitConfigL && config.N != InitConfigN:
+		fallthrough
+	case config.B != InitConfigB && config.L != InitConfigL && config.N != InitConfigN:
+		return errors.New("cannot split in more than one way")
+	case config.L <= 0:
+		return errors.New("invalid number of lines: ‘" + fmt.Sprint(config.L) + "’")
+	case invalidBFlag(config.B):
+		return errors.New("invalid number of lines: ‘" + fmt.Sprint(config.B) + "’")
+	default:
+		return nil
+	}
+}
+
+func ParseFlags() (*Config, error) {
+	config := &Config{}
+	flag.StringVar(&config.B, "b", InitConfigB, "-b flag")
+	flag.IntVar(&config.L, "l", InitConfigL, "-l flag")
+	flag.StringVar(&config.N, "n", InitConfigN, "-n flag")
+	flag.Parse()
+	return config, config.validate()
+}
+
+func (config *Config) ConvertSplitType() (SplitType, error) {
+	var result SplitType
+	var err error
+	switch {
+	case config.N != InitConfigN:
+		outputLine, value, e := splitType.ExtractNumbers(config.N)
+		err = e
+		result = SplitType{ThresholdType: "lineEquallyDivided", Value: value, OutputLine: outputLine}
+	case config.B != InitConfigB:
+		flagValue, e := splitType.ParseByteSize(config.B)
+		err = e
+		result = SplitType{ThresholdType: "byte", Value: flagValue, OutputLine: 0}
+	default:
+		result = SplitType{ThresholdType: "line", Value: config.L, OutputLine: 0}
+	}
+	return result, err
+}
+-- io/io_test.go --
+package split
+
+import (
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestDecimalToAlphabet(t *testing.T) {
+	tests := []struct {
+		decimal          int
+		maxDigit         int
+		expectedAlphabet string
+	}{
+		{1, 2, "ab"},
+		{25, 2, "az"},
+		{26, 2, "ba"},
+		{27, 2, "bb"},
+	}
+
+	for _, test := range tests {
+		result := decimalToAlphabet(test.decimal, test.maxDigit)
+		if result != test.expectedAlphabet {
+			t.Errorf("For decimal %d and maxDigit %d, expected %s but got %s", test.decimal, test.maxDigit, test.expectedAlphabet, result)
+		}
+	}
+}
+
+func TestCreateNewOutputFile(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test_output")
+	if err != nil {
+		t.Fatalf("Error creating temporary directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	tests := []struct {
+		fileNamePrefix   string
+		decimal          int
+		alphabetMaxDigit int
+		expectedContent  string
+	}{
+		{"test_file_", 1, 2, "test_file_ab"},
+		{"test_file_", 25, 2, "test_file_az"},
+	}
+
+	for _, test := range tests {
+		outputFile, err := createNewOutputFile(tempDir+string(filepath.Separator)+test.fileNamePrefix, test.decimal, test.alphabetMaxDigit)
+		if err != nil {
+			t.Errorf("Error creating output file: %v", err)
+			continue
+		}
+		defer outputFile.(io.Closer).Close()
+
+		expectedFilePath := filepath.Join(tempDir, test.expectedContent)
+		if outputFile.(*os.File).Name() != expectedFilePath {
+			t.Errorf("For fileNamePrefix %s, decimal %d, and alphabetMaxDigit %d, expected file path %s but got %s",
+				test.fileNamePrefix, test.decimal, test.alphabetMaxDigit, expectedFilePath, outputFile.(*os.File).Name())
+		}
+	}
+}
+-- io/io.go --
+package split
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	splitType "split/splittype"
+	"strings"
+)
+
+const (
+	alphabet             = "abcdefghijklmnopqrstuvwxyz"
+	carryForwardAlphabet = len(alphabet)
+)
+
+func decimalToAlphabet(decimal, maxDigit int) string {
+	result := ""
+	for decimal > 0 {
+		remainder := decimal % carryForwardAlphabet
+		result = string(alphabet[remainder]) + result
+		decimal /= carryForwardAlphabet
+	}
+
+	for len(result) < maxDigit {
+		result = "a" + result
+	}
+
+	return result
+}
+
+func createNewOutputFile(fileNamePrefix string, decimal, alphabetMaxDigit int) (io.Writer, error) {
+	outputFilePath := fmt.Sprintf("%s%s", fileNamePrefix, decimalToAlphabet(decimal, alphabetMaxDigit))
+	outputFile, err := os.Create(outputFilePath)
+	if err != nil {
+		return nil, err
+	}
+	return outputFile, nil
+}
+
+func SplitDataToFiles(splitType splitType.SplitType) error {
+	switch {
+	case strings.Contains(splitType.ThresholdType, "line"):
+		return SplitDataToFilesByLine(splitType)
+	case splitType.ThresholdType == "byte":
+		return SplitDataToFilesByByte(splitType)
+	default:
+		return errors.New("unsupported split type")
+	}
+}
+
+func SplitDataToFilesByLine(splitType splitType.SplitType) error {
+	data, err := os.ReadFile(os.Args[len(os.Args)-1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	var thresholdPerFile int
+	switch splitType.ThresholdType {
+	case "lineEquallyDivided":
+		thresholdPerFile = len(lines) / splitType.Value
+	case "line":
+		if splitType.Value > 0 && splitType.Value <= len(lines) {
+			thresholdPerFile = splitType.Value
+		} else {
+			return errors.New("invalid threshold value")
+		}
+	}
+
+	alphabetMaxDigit := 2
+	fileNamePrefix := "x"
+
+	outputFileCounter := 0
+	decimalCounter := 0
+
+	outputFile, err := createNewOutputFile(fileNamePrefix, decimalCounter, alphabetMaxDigit)
+	if err != nil {
+		return err
+	}
+
+	writeCounter := 0
+	for _, line := range lines {
+		fmt.Fprintln(outputFile, line)
+		writeCounter++
+		if writeCounter == thresholdPerFile {
+			writeCounter = 0
+			if outputFileCounter == int(math.Pow(float64(carryForwardAlphabet), float64(alphabetMaxDigit))-1) {
+				decimalCounter = 0
+				alphabetMaxDigit++
+				fileNamePrefix += "z"
+			} else {
+				decimalCounter++
+			}
+			if outputFile, err = createNewOutputFile(fileNamePrefix, decimalCounter, alphabetMaxDigit); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func SplitDataToFilesByByte(splitType splitType.SplitType) error {
+	data, err := os.ReadFile(os.Args[len(os.Args)-1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return err
+	}
+
+	var thresholdPerFile int
+
+	if splitType.Value > 0 && splitType.Value <= len(data) {
+		thresholdPerFile = splitType.Value
+	} else {
+		return fmt.Errorf("invalid threshold value")
+	}
+
+	alphabetMaxDigit := 2
+	fileNamePrefix := "x"
+
+	outputFileCounter := 0
+	decimalCounter := 0
+
+	outputFile, err := createNewOutputFile(fileNamePrefix, decimalCounter, alphabetMaxDigit)
+	if err != nil {
+		return err
+	}
+
+	writeCounter := 0
+	for _, b := range data {
+		fmt.Fprintf(outputFile, "%c", b)
+		writeCounter++
+		if writeCounter == thresholdPerFile {
+			writeCounter = 0
+			if outputFileCounter == int(math.Pow(float64(carryForwardAlphabet), float64(alphabetMaxDigit))-1) {
+				decimalCounter = 0
+				alphabetMaxDigit++
+				fileNamePrefix += "z"
+			} else {
+				decimalCounter++
+			}
+			if outputFile, err = createNewOutputFile(fileNamePrefix, decimalCounter, alphabetMaxDigit); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+-- submit.txt --
